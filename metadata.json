@@ -1,0 +1,8 @@
+{
+  "name": "Eye-Tracking Keyboard",
+  "description": "Browser-based eye-tracking keyboard using webcam and MediaPipe Face Mesh.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
