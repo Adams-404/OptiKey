@@ -23,14 +23,15 @@ class GazeTrackerService {
   private onGaze: GazeListener | null = null;
   
   public calibrationData: CalibrationPoint[] = [];
+  public trackingMode: 'eye' | 'head' | 'hybrid' = 'head';
+  public smoothing: number = 8;
 
   public setCanvas(canvas: HTMLCanvasElement | null) {
     this.canvasElement = canvas;
   }
   
-  // Smoothing
+  // Smoothing history
   private gazeHistory: Point[] = [];
-  private readonly historySize = 5;
 
   private onResults(results: any) {
     if (this.canvasElement) {
@@ -70,6 +71,15 @@ class GazeTrackerService {
             ctx.arc(rightIris.x * this.canvasElement.width, rightIris.y * this.canvasElement.height, 3, 0, 2 * Math.PI);
             ctx.fill();
           }
+
+          // Highlight Nose for head tracking
+          const nose = landmarks[1];
+          if (nose) {
+            ctx.fillStyle = '#00ffaa';
+            ctx.beginPath();
+            ctx.arc(nose.x * this.canvasElement.width, nose.y * this.canvasElement.height, 5, 0, 2 * Math.PI);
+            ctx.fill();
+          }
         }
         ctx.restore();
       }
@@ -82,35 +92,15 @@ class GazeTrackerService {
       return;
     }
 
-    const landmarks = results.multiFaceLandmarks[0];
-    const leftIris = landmarks[468]; // left eye center
-    const rightIris = landmarks[473]; // right eye center
-    const nose = landmarks[1]; // nose tip
-
-    if (!leftIris || !rightIris || !nose) {
-      return;
-    }
-
-    // Distance between eyes to normalize
-    const dx = rightIris.x - leftIris.x;
-    const dy = rightIris.y - leftIris.y;
-    const eyeDist = Math.sqrt(dx * dx + dy * dy);
-
-    if (eyeDist === 0) return;
-
-    const featureVector = [
-      (leftIris.x - nose.x) / eyeDist,
-      (leftIris.y - nose.y) / eyeDist,
-      (rightIris.x - nose.x) / eyeDist,
-      (rightIris.y - nose.y) / eyeDist
-    ];
+    const featureVector = this.getCurrentFeatures();
+    if (!featureVector) return;
 
     if (this.calibrationData.length > 0) {
       const estimatedPoint = this.estimateScreenPosition(featureVector);
       
       // Smooth out
       this.gazeHistory.push(estimatedPoint);
-      if (this.gazeHistory.length > this.historySize) {
+      while (this.gazeHistory.length > this.smoothing) {
         this.gazeHistory.shift();
       }
 
@@ -120,19 +110,15 @@ class GazeTrackerService {
         avgX += p.x;
         avgY += p.y;
       }
-      avgX /= this.gazeHistory.length;
-      avgY /= this.gazeHistory.length;
+      avgX /= this.gazeHistory.length || 1;
+      avgY /= this.gazeHistory.length || 1;
 
       if (this.onGaze) {
         this.onGaze({ x: avgX, y: avgY }, false);
       }
     } else {
-      // If not calibrated, just return the raw feature vector roughly scaled or emit an event
-      // We pass the raw feature vector in "x" to be collected by the calibration screen.
-      // Kinda hacky but works for now.
       if (this.onGaze) {
         this.onGaze({ x: -1, y: -1 }, false); 
-        // We will expose a method to get current features
       }
     }
   }
@@ -154,12 +140,15 @@ class GazeTrackerService {
 
     if (eyeDist === 0) return null;
 
-    return [
-      (leftIris.x - nose.x) / eyeDist,
-      (leftIris.y - nose.y) / eyeDist,
-      (rightIris.x - nose.x) / eyeDist,
-      (rightIris.y - nose.y) / eyeDist
-    ];
+    const eyeFx1 = (leftIris.x - nose.x) / eyeDist;
+    const eyeFy1 = (leftIris.y - nose.y) / eyeDist;
+    const eyeFx2 = (rightIris.x - nose.x) / eyeDist;
+    const eyeFy2 = (rightIris.y - nose.y) / eyeDist;
+
+    const headX = nose.x;
+    const headY = nose.y;
+
+    return [eyeFx1, eyeFy1, eyeFx2, eyeFy2, headX, headY, headX, headY];
   }
 
   private lastLandmarks: any = null;
@@ -221,19 +210,32 @@ class GazeTrackerService {
     let sumY = 0;
 
     for (const cp of this.calibrationData) {
-      // find average feature for this cp
       if (cp.features.length === 0) continue;
       
-      const avgF = [0,0,0,0];
+      const avgF = new Array(8).fill(0);
       for (const feat of cp.features) {
-        for (let i = 0; i < 4; i++) avgF[i] += feat[i];
+        for (let i = 0; i < feat.length; i++) {
+          avgF[i] += feat[i] || 0;
+        }
       }
-      for (let i = 0; i < 4; i++) avgF[i] /= cp.features.length;
+      for (let i = 0; i < 8; i++) avgF[i] /= cp.features.length;
 
-      // Distance
       let distSq = 0;
-      for (let i = 0; i < 4; i++) {
-        distSq += Math.pow(f[i] - avgF[i], 2);
+      if (this.trackingMode === 'eye') {
+        for (let i = 0; i < 4; i++) {
+          distSq += Math.pow(f[i] - avgF[i], 2);
+        }
+      } else if (this.trackingMode === 'head') {
+        for (let i = 4; i < 8; i++) {
+          distSq += Math.pow(f[i] - avgF[i], 2);
+        }
+      } else { // hybrid
+        for (let i = 0; i < 4; i++) {
+          distSq += Math.pow(f[i] - avgF[i], 2) * 0.3;
+        }
+        for (let i = 4; i < 8; i++) {
+          distSq += Math.pow(f[i] - avgF[i], 2) * 0.7;
+        }
       }
       
       const weight = 1.0 / (distSq + 0.000001);
