@@ -17,9 +17,25 @@ export default function App() {
   const [smoothing, setSmoothing] = useState<number>(8);
   const [dwellTime, setDwellTime] = useState<number>(700);
 
+  const lastMouseActivityRef = useRef<number>(0);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      lastMouseActivityRef.current = Date.now();
+      setGazePoint({ x: e.clientX, y: e.clientY });
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, []);
+
   useEffect(() => {
     if (videoRef.current) {
       gazeTracker.start(videoRef.current, (point) => {
+        if (Date.now() - lastMouseActivityRef.current < 1500) {
+          return;
+        }
         setGazePoint(point);
         if (point.x === -1 && gazeTracker.calibrationData.length > 0) {
           setTrackerStatus('Lost face');

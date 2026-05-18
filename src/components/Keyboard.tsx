@@ -36,16 +36,18 @@ interface KeyProps {
   progress: number;
   className?: string;
   isPrediction?: boolean;
+  onClick?: () => void;
 }
 
-const Key = ({ id, label, width = 'w-20', className, isHovered, progress, isPrediction }: KeyProps) => {
+const Key = ({ id, label, width = 'w-20', className, isHovered, progress, isPrediction, onClick }: KeyProps) => {
   if (isPrediction) {
     return (
       <div
         id={`key-${id}`}
         data-key={id}
+        onClick={onClick}
         className={cn(
-          "bg-zinc-900/80 border border-white/10 rounded-full px-6 py-2.5 text-sm cursor-pointer text-zinc-300 transition-all relative overflow-hidden flex items-center justify-center font-sans tracking-wide shadow-md backdrop-blur-sm",
+          "bg-zinc-900/80 border border-white/10 rounded-full px-6 py-2.5 text-sm cursor-pointer text-zinc-300 transition-all relative overflow-hidden flex items-center justify-center font-sans tracking-wide shadow-md backdrop-blur-sm select-none",
           isHovered && "border-[#00d2ff] text-white shadow-[0_0_15px_rgba(0,210,255,0.4)] scale-105 z-20 bg-zinc-800",
           className
         )}
@@ -65,8 +67,9 @@ const Key = ({ id, label, width = 'w-20', className, isHovered, progress, isPred
     <div
       id={`key-${id}`}
       data-key={id}
+      onClick={onClick}
       className={cn(
-        "relative flex flex-col items-center justify-center rounded-xl transition-all duration-200 font-mono h-full backdrop-blur-sm",
+        "relative flex flex-col items-center justify-center rounded-xl transition-all duration-200 font-mono h-full backdrop-blur-sm cursor-pointer select-none",
         width,
         isHovered 
           ? "bg-gradient-to-b from-[#00d2ff]/20 to-[#00d2ff]/40 border-2 border-[#00d2ff] shadow-[0_0_25px_rgba(0,210,255,0.3)] z-20 scale-[1.03]" 
@@ -136,6 +139,14 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
     } else {
       setText(t => t + keyId);
     }
+  };
+
+  const handleKeyClick = (keyId: string) => {
+    handleKeyPress(keyId);
+    setHoveredKey(null);
+    setDwellProgress(0);
+    hoverStartTimeRef.current = null;
+    lastHoveredKeyRef.current = null;
   };
 
   useEffect(() => {
@@ -223,6 +234,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
               isHovered={hoveredKey === `PRED_${word}`}
               progress={hoveredKey === `PRED_${word}` ? dwellProgress : 0}
               isPrediction={true}
+              onClick={() => handleKeyClick(`PRED_${word}`)}
             />
           ))}
         </section>
@@ -236,8 +248,9 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
               key={char}
               id={`key-${char}`}
               data-key={char}
+              onClick={() => handleKeyClick(char)}
               className={cn(
-                "relative flex flex-col items-center justify-center rounded-3xl transition-all duration-300 border backdrop-blur-md shadow-2xl overflow-hidden",
+                "relative flex flex-col items-center justify-center rounded-3xl transition-all duration-300 border backdrop-blur-md shadow-2xl overflow-hidden cursor-pointer select-none",
                 hoveredKey === char 
                   ? "bg-gradient-to-br from-[#00d2ff]/25 to-[#00d2ff]/45 border-2 border-[#00d2ff] shadow-[0_0_40px_rgba(0,210,255,0.4)] scale-[1.02] z-20" 
                   : "bg-gradient-to-br from-zinc-900/80 to-zinc-950/80 border-white/10 hover:border-white/20 z-10 shadow-[0_10px_30px_rgba(0,0,0,0.6)]"
@@ -271,6 +284,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
                   width="w-20"
                   isHovered={hoveredKey === char}
                   progress={hoveredKey === char ? dwellProgress : 0}
+                  onClick={() => handleKeyClick(char)}
                 />
               ))}
               {i === 2 && (
@@ -281,6 +295,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
                   className="!bg-red-500/15 !border-red-500/30 !text-red-400"
                   isHovered={hoveredKey === 'BACKSPACE'}
                   progress={hoveredKey === 'BACKSPACE' ? dwellProgress : 0}
+                  onClick={() => handleKeyClick('BACKSPACE')}
                 />
               )}
             </div>
@@ -295,6 +310,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
                 className="!bg-cyan-500/20 !border-cyan-500/40 !text-cyan-400 font-bold tracking-wider"
                 isHovered={hoveredKey === 'TOGGLE_LAYOUT'}
                 progress={hoveredKey === 'TOGGLE_LAYOUT' ? dwellProgress : 0}
+                onClick={() => handleKeyClick('TOGGLE_LAYOUT')}
               />
              <Key 
                 id="SPACE" 
@@ -303,6 +319,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
                 className="text-zinc-300 font-sans tracking-widest"
                 isHovered={hoveredKey === 'SPACE'}
                 progress={hoveredKey === 'SPACE' ? dwellProgress : 0}
+                onClick={() => handleKeyClick('SPACE')}
               />
                <Key 
                 id="ENTER" 
@@ -311,6 +328,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
                 className="!bg-cyan-500/20 !border-cyan-400 !text-cyan-400 text-sm font-bold"
                 isHovered={hoveredKey === 'ENTER'}
                 progress={hoveredKey === 'ENTER' ? dwellProgress : 0}
+                onClick={() => handleKeyClick('ENTER')}
               />
           </div>
         </section>
@@ -335,6 +353,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
             className="!bg-cyan-500/15 !border-cyan-500/40 !text-cyan-300 shadow-[0_0_20px_rgba(0,210,255,0.15)]"
             isHovered={hoveredKey === 'PAGE_NEXT'}
             progress={hoveredKey === 'PAGE_NEXT' ? dwellProgress : 0}
+            onClick={() => handleKeyClick('PAGE_NEXT')}
           />
 
           <Key 
@@ -344,6 +363,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
             className="!bg-zinc-800/80 !border-white/15 text-white"
             isHovered={hoveredKey === 'SPACE'}
             progress={hoveredKey === 'SPACE' ? dwellProgress : 0}
+            onClick={() => handleKeyClick('SPACE')}
           />
 
           <Key 
@@ -353,6 +373,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
             className="!bg-red-500/15 !border-red-500/30 !text-red-400 shadow-[0_0_20px_rgba(239,68,68,0.1)]"
             isHovered={hoveredKey === 'BACKSPACE'}
             progress={hoveredKey === 'BACKSPACE' ? dwellProgress : 0}
+            onClick={() => handleKeyClick('BACKSPACE')}
           />
 
           <Key 
@@ -362,6 +383,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
             className="!bg-zinc-800/80 !border-white/15 text-zinc-300"
             isHovered={hoveredKey === 'TOGGLE_LAYOUT'}
             progress={hoveredKey === 'TOGGLE_LAYOUT' ? dwellProgress : 0}
+            onClick={() => handleKeyClick('TOGGLE_LAYOUT')}
           />
         </section>
       )}
