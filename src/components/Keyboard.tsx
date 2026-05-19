@@ -116,6 +116,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
   // Update suggestions based on text and Groq API Key
   useEffect(() => {
     let active = true;
+    let debounceTimer: NodeJS.Timeout | null = null;
 
     const fetchPredictions = async () => {
       const localPredictions = AutocompleteService.getPredictions(text);
@@ -126,18 +127,25 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
         return;
       }
 
-      if (groqKey) {
+      // Groq LLM is only queried if:
+      // 1. Groq API Key is present
+      // 2. The user completed a word (text ends with a space)
+      if (groqKey && text.endsWith(' ')) {
         setIsLlmActive(true);
-        const onlinePredictions = await AutocompleteService.queryGroqPrediction(text, groqKey);
         
-        if (active) {
-          if (onlinePredictions.length > 0) {
-            setSuggestions(onlinePredictions);
-          } else {
-            setSuggestions(localPredictions);
-            setIsLlmActive(false);
+        // Debounce calls by 250ms to prevent spamming the API when spacing/typing quickly
+        debounceTimer = setTimeout(async () => {
+          const onlinePredictions = await AutocompleteService.queryGroqPrediction(text, groqKey);
+          
+          if (active) {
+            if (onlinePredictions.length > 0) {
+              setSuggestions(onlinePredictions);
+            } else {
+              setSuggestions(localPredictions);
+              setIsLlmActive(false);
+            }
           }
-        }
+        }, 250);
       } else {
         if (active) {
           setSuggestions(localPredictions);
@@ -150,6 +158,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
 
     return () => {
       active = false;
+      if (debounceTimer) clearTimeout(debounceTimer);
     };
   }, [text, groqKey]);
 
