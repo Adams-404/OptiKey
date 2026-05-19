@@ -36,16 +36,18 @@ interface KeyProps {
   progress: number;
   className?: string;
   isPrediction?: boolean;
+  onClick?: () => void;
 }
 
-const Key = ({ id, label, width = 'w-20', className, isHovered, progress, isPrediction }: KeyProps) => {
+const Key = ({ id, label, width = 'w-20', className, isHovered, progress, isPrediction, onClick }: KeyProps) => {
   if (isPrediction) {
     return (
       <div
         id={`key-${id}`}
         data-key={id}
+        onClick={onClick}
         className={cn(
-          "bg-zinc-900/80 border border-white/10 rounded-full px-6 py-2.5 text-sm cursor-pointer text-zinc-300 transition-all relative overflow-hidden flex items-center justify-center font-sans tracking-wide shadow-md backdrop-blur-sm",
+          "bg-zinc-900/80 border border-white/10 rounded-full px-6 py-2.5 text-sm cursor-pointer text-zinc-300 transition-all relative overflow-hidden flex items-center justify-center font-sans tracking-wide shadow-md backdrop-blur-sm select-none",
           isHovered && "border-[#00d2ff] text-white shadow-[0_0_15px_rgba(0,210,255,0.4)] scale-105 z-20 bg-zinc-800",
           className
         )}
@@ -65,8 +67,9 @@ const Key = ({ id, label, width = 'w-20', className, isHovered, progress, isPred
     <div
       id={`key-${id}`}
       data-key={id}
+      onClick={onClick}
       className={cn(
-        "relative flex flex-col items-center justify-center rounded-xl transition-all duration-200 font-mono h-full backdrop-blur-sm",
+        "relative flex flex-col items-center justify-center rounded-xl transition-all duration-200 font-mono h-full backdrop-blur-sm cursor-pointer select-none",
         width,
         isHovered 
           ? "bg-gradient-to-b from-[#00d2ff]/20 to-[#00d2ff]/40 border-2 border-[#00d2ff] shadow-[0_0_25px_rgba(0,210,255,0.3)] z-20 scale-[1.03]" 
@@ -138,6 +141,14 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
     }
   };
 
+  const handleKeyClick = (keyId: string) => {
+    handleKeyPress(keyId);
+    setHoveredKey(null);
+    setDwellProgress(0);
+    hoverStartTimeRef.current = null;
+    lastHoveredKeyRef.current = null;
+  };
+
   useEffect(() => {
     const keys = document.querySelectorAll('[data-key]');
     let foundKey: string | null = null;
@@ -194,12 +205,12 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
   const currentPageLetters = QUADRANT_PAGES[quadrantPage];
 
   return (
-    <div className="flex-grow flex flex-col p-6 gap-6 select-none w-full max-w-[1400px] mx-auto h-full justify-between">
+    <div className="flex-grow flex flex-col p-6 gap-6 select-none w-full max-w-none mx-auto h-full justify-between">
       
       {/* Top Header Section */}
       <div className="flex flex-col gap-4 shrink-0">
         {/* Output Message Display area */}
-        <section className="bg-zinc-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 shadow-[0_8px_30px_rgba(0,0,0,0.5)] flex flex-col min-h-[120px] max-h-[160px]">
+        <section className="bg-zinc-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 shadow-[0_8px_30px_rgba(0,0,0,0.5)] flex flex-col min-h-[120px] max-h-[160px] ml-[272px]">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] uppercase tracking-widest text-cyan-400 font-extrabold flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span> Output Message
@@ -213,7 +224,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
         </section>
 
         {/* Predictive Suggestions Bank */}
-        <section className="flex justify-center gap-4 flex-wrap shrink-0">
+        <section className="flex justify-center gap-4 flex-wrap shrink-0 ml-[272px]">
           {suggestions.map(word => (
             <Key 
               key={`PRED_${word}`} 
@@ -223,6 +234,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
               isHovered={hoveredKey === `PRED_${word}`}
               progress={hoveredKey === `PRED_${word}` ? dwellProgress : 0}
               isPrediction={true}
+              onClick={() => handleKeyClick(`PRED_${word}`)}
             />
           ))}
         </section>
@@ -236,8 +248,9 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
               key={char}
               id={`key-${char}`}
               data-key={char}
+              onClick={() => handleKeyClick(char)}
               className={cn(
-                "relative flex flex-col items-center justify-center rounded-3xl transition-all duration-300 border backdrop-blur-md shadow-2xl overflow-hidden",
+                "relative flex flex-col items-center justify-center rounded-3xl transition-all duration-300 border backdrop-blur-md shadow-2xl overflow-hidden cursor-pointer select-none",
                 hoveredKey === char 
                   ? "bg-gradient-to-br from-[#00d2ff]/25 to-[#00d2ff]/45 border-2 border-[#00d2ff] shadow-[0_0_40px_rgba(0,210,255,0.4)] scale-[1.02] z-20" 
                   : "bg-gradient-to-br from-zinc-900/80 to-zinc-950/80 border-white/10 hover:border-white/20 z-10 shadow-[0_10px_30px_rgba(0,0,0,0.6)]"
@@ -260,57 +273,69 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
           ))}
         </section>
       ) : (
-        <section className="grid gap-3 shrink-0 my-auto" style={{ gridTemplateRows: 'repeat(4, 75px)' }}>
+        <section className="flex-grow flex flex-col gap-4 my-2 min-h-[400px]">
           {QWERTY_LAYOUT.map((row, i) => (
-            <div key={i} className="flex justify-center gap-3">
+            <div key={i} className="flex justify-center gap-4 flex-grow h-0">
+              {/* Add offset spacing to shift rows nicely like standard key layout */}
+              {i === 1 && <div className="flex-[0.5] pointer-events-none" />}
+              {i === 2 && <div className="flex-[0.5] pointer-events-none" />}
+
               {row.map(char => (
                 <Key 
                   key={char} 
                   id={char} 
-                  label={<span className="text-2xl font-semibold">{char}</span>} 
-                  width="w-20"
+                  label={<span className="text-3xl font-semibold">{char}</span>} 
+                  width="flex-1"
                   isHovered={hoveredKey === char}
                   progress={hoveredKey === char ? dwellProgress : 0}
+                  onClick={() => handleKeyClick(char)}
                 />
               ))}
               {i === 2 && (
                 <Key 
                   id="BACKSPACE" 
-                  label={<span className="text-sm font-bold flex items-center gap-1"><Delete size={16} /> BKSP</span>}
-                  width="w-32"
+                  label={<span className="text-base font-bold flex items-center gap-2 justify-center"><Delete size={20} /> BKSP</span>}
+                  width="flex-[1.8]"
                   className="!bg-red-500/15 !border-red-500/30 !text-red-400"
                   isHovered={hoveredKey === 'BACKSPACE'}
                   progress={hoveredKey === 'BACKSPACE' ? dwellProgress : 0}
+                  onClick={() => handleKeyClick('BACKSPACE')}
                 />
               )}
+
+              {i === 1 && <div className="flex-[0.5] pointer-events-none" />}
+              {i === 2 && <div className="flex-[0.2] pointer-events-none" />}
             </div>
           ))}
           
           {/* Bottom Row */}
-          <div className="flex justify-center gap-3">
+          <div className="flex justify-center gap-4 flex-grow h-0">
              <Key 
                 id="TOGGLE_LAYOUT" 
-                label={<span className="text-xs font-bold flex items-center gap-1.5"><LayoutGrid size={16} /> BIG KEYS</span>}
-                width="w-36"
+                label={<span className="text-sm font-bold flex items-center gap-2 justify-center"><LayoutGrid size={18} /> BIG KEYS</span>}
+                width="flex-[2.2]"
                 className="!bg-cyan-500/20 !border-cyan-500/40 !text-cyan-400 font-bold tracking-wider"
                 isHovered={hoveredKey === 'TOGGLE_LAYOUT'}
                 progress={hoveredKey === 'TOGGLE_LAYOUT' ? dwellProgress : 0}
+                onClick={() => handleKeyClick('TOGGLE_LAYOUT')}
               />
              <Key 
                 id="SPACE" 
-                label={<span className="text-xs font-bold tracking-widest flex items-center gap-2"><Space size={16} /> SPACE</span>}
-                width="w-[450px]"
+                label={<span className="text-sm font-bold tracking-widest flex items-center gap-2 justify-center"><Space size={20} /> SPACE</span>}
+                width="flex-[6.5]"
                 className="text-zinc-300 font-sans tracking-widest"
                 isHovered={hoveredKey === 'SPACE'}
                 progress={hoveredKey === 'SPACE' ? dwellProgress : 0}
+                onClick={() => handleKeyClick('SPACE')}
               />
                <Key 
                 id="ENTER" 
-                label={<span className="text-sm font-bold flex items-center gap-1"><CornerDownLeft size={16} /> ENTER</span>}
-                width="w-32"
-                className="!bg-cyan-500/20 !border-cyan-400 !text-cyan-400 text-sm font-bold"
+                label={<span className="text-base font-bold flex items-center gap-2 justify-center"><CornerDownLeft size={20} /> ENTER</span>}
+                width="flex-[2.2]"
+                className="!bg-cyan-500/20 !border-cyan-400 !text-cyan-400 font-bold"
                 isHovered={hoveredKey === 'ENTER'}
                 progress={hoveredKey === 'ENTER' ? dwellProgress : 0}
+                onClick={() => handleKeyClick('ENTER')}
               />
           </div>
         </section>
@@ -335,6 +360,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
             className="!bg-cyan-500/15 !border-cyan-500/40 !text-cyan-300 shadow-[0_0_20px_rgba(0,210,255,0.15)]"
             isHovered={hoveredKey === 'PAGE_NEXT'}
             progress={hoveredKey === 'PAGE_NEXT' ? dwellProgress : 0}
+            onClick={() => handleKeyClick('PAGE_NEXT')}
           />
 
           <Key 
@@ -344,6 +370,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
             className="!bg-zinc-800/80 !border-white/15 text-white"
             isHovered={hoveredKey === 'SPACE'}
             progress={hoveredKey === 'SPACE' ? dwellProgress : 0}
+            onClick={() => handleKeyClick('SPACE')}
           />
 
           <Key 
@@ -353,6 +380,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
             className="!bg-red-500/15 !border-red-500/30 !text-red-400 shadow-[0_0_20px_rgba(239,68,68,0.1)]"
             isHovered={hoveredKey === 'BACKSPACE'}
             progress={hoveredKey === 'BACKSPACE' ? dwellProgress : 0}
+            onClick={() => handleKeyClick('BACKSPACE')}
           />
 
           <Key 
@@ -362,6 +390,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
             className="!bg-zinc-800/80 !border-white/15 text-zinc-300"
             isHovered={hoveredKey === 'TOGGLE_LAYOUT'}
             progress={hoveredKey === 'TOGGLE_LAYOUT' ? dwellProgress : 0}
+            onClick={() => handleKeyClick('TOGGLE_LAYOUT')}
           />
         </section>
       )}

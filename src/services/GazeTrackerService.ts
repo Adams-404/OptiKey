@@ -14,6 +14,64 @@ export interface FeatureVector {
 
 export type GazeListener = (point: Point, isBlinking: boolean) => void;
 
+class OneEuroFilter {
+  private minCutoff: number;
+  private beta: number;
+  private dCutoff: number;
+  private lastValue: number | null = null;
+  private lastDerivative: number | null = null;
+  private lastTime: number | null = null;
+
+  constructor(minCutoff = 0.15, beta = 0.02, dCutoff = 1.0) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+  }
+
+  public updateParams(minCutoff: number, beta: number) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+  }
+
+  public filter(value: number, timestamp: number): number {
+    if (this.lastValue === null || this.lastTime === null) {
+      this.lastValue = value;
+      this.lastTime = timestamp;
+      this.lastDerivative = 0;
+      return value;
+    }
+
+    const dt = (timestamp - this.lastTime) / 1000.0;
+    if (dt <= 0) return this.lastValue;
+
+    // Calculate derivative (speed)
+    const derivative = (value - this.lastValue) / dt;
+    
+    // Filter derivative
+    const alphaD = 1.0 / (1.0 + this.dCutoff / (2 * Math.PI * dt));
+    const filteredDerivative = alphaD * derivative + (1 - alphaD) * (this.lastDerivative || 0);
+
+    // Calculate adaptive cutoff frequency based on speed
+    const cutoff = this.minCutoff + this.beta * Math.abs(filteredDerivative);
+    
+    // Filter value
+    const alpha = 1.0 / (1.0 + cutoff / (2 * Math.PI * dt));
+    const filteredValue = alpha * value + (1 - alpha) * this.lastValue;
+
+    this.lastValue = filteredValue;
+    this.lastDerivative = filteredDerivative;
+    this.lastTime = timestamp;
+
+    return filteredValue;
+  }
+
+  public reset() {
+    this.lastValue = null;
+    this.lastDerivative = null;
+    this.lastTime = null;
+  }
+}
+
 class GazeTrackerService {
   private videoElement: HTMLVideoElement | null = null;
   private canvasElement: HTMLCanvasElement | null = null;
@@ -26,12 +84,37 @@ class GazeTrackerService {
   public trackingMode: 'eye' | 'head' | 'hybrid' = 'head';
   public smoothing: number = 8;
 
+  private xFilter = new OneEuroFilter();
+  private yFilter = new OneEuroFilter();
+
   public setCanvas(canvas: HTMLCanvasElement | null) {
     this.canvasElement = canvas;
   }
   
-  // Smoothing history
-  private gazeHistory: Point[] = [];
+  private updateFilterParams() {
+    // Map smoothing (4 - 15) to minCutoff and beta
+    // Raw (4): minCutoff = 0.45, beta = 0.04
+    // Balanced (8): minCutoff = 0.15, beta = 0.015
+    // Ultra Stable (15): minCutoff = 0.03, beta = 0.003
+    let minCutoff = 0.15;
+    let beta = 0.015;
+
+    if (this.smoothing <= 4) {
+      minCutoff = 0.45;
+      beta = 0.04;
+    } else if (this.smoothing >= 15) {
+      minCutoff = 0.03;
+      beta = 0.003;
+    } else {
+      // Linear interpolation between raw (4) and stable (15) for smooth transition
+      const t = (this.smoothing - 4) / 11; // 0 to 1
+      minCutoff = 0.45 - t * (0.45 - 0.03); 
+      beta = 0.04 - t * (0.04 - 0.003); 
+    }
+
+    this.xFilter.updateParams(minCutoff, beta);
+    this.yFilter.updateParams(minCutoff, beta);
+  }
 
   private onResults(results: any) {
     if (this.canvasElement) {
@@ -86,6 +169,8 @@ class GazeTrackerService {
     }
 
     if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+      this.xFilter.reset();
+      this.yFilter.reset();
       if (this.onGaze) {
         this.onGaze({ x: -1, y: -1 }, false);
       }
@@ -98,23 +183,15 @@ class GazeTrackerService {
     if (this.calibrationData.length > 0) {
       const estimatedPoint = this.estimateScreenPosition(featureVector);
       
-      // Smooth out
-      this.gazeHistory.push(estimatedPoint);
-      while (this.gazeHistory.length > this.smoothing) {
-        this.gazeHistory.shift();
-      }
+      // Update filter parameters dynamically
+      this.updateFilterParams();
 
-      let avgX = 0;
-      let avgY = 0;
-      for (const p of this.gazeHistory) {
-        avgX += p.x;
-        avgY += p.y;
-      }
-      avgX /= this.gazeHistory.length || 1;
-      avgY /= this.gazeHistory.length || 1;
+      const now = performance.now();
+      const filteredX = this.xFilter.filter(estimatedPoint.x, now);
+      const filteredY = this.yFilter.filter(estimatedPoint.y, now);
 
       if (this.onGaze) {
-        this.onGaze({ x: avgX, y: avgY }, false);
+        this.onGaze({ x: filteredX, y: filteredY }, false);
       }
     } else {
       if (this.onGaze) {
@@ -129,26 +206,50 @@ class GazeTrackerService {
     const leftIris = landmarks[468]; 
     const rightIris = landmarks[473]; 
     const nose = landmarks[1]; 
+    const leftOuter = landmarks[33];
+    const leftInner = landmarks[133];
+    const rightOuter = landmarks[263];
+    const rightInner = landmarks[362];
+    const chin = landmarks[152];
 
-    if (!leftIris || !rightIris || !nose) {
+    if (!leftIris || !rightIris || !nose || !leftOuter || !leftInner || !rightOuter || !rightInner || !chin) {
       return null;
     }
 
-    const dx = rightIris.x - leftIris.x;
-    const dy = rightIris.y - leftIris.y;
-    const eyeDist = Math.sqrt(dx * dx + dy * dy);
+    // Outer eye-to-eye distance for overall face scale scaling
+    const dx = rightOuter.x - leftOuter.x;
+    const dy = rightOuter.y - leftOuter.y;
+    const faceScale = Math.sqrt(dx * dx + dy * dy);
+    if (faceScale === 0) return null;
 
-    if (eyeDist === 0) return null;
+    // --- HIGH-PRECISION EYE FEATURES (Gaze relative to head) ---
+    const leftEyeWidth = Math.sqrt(Math.pow(leftOuter.x - leftInner.x, 2) + Math.pow(leftOuter.y - leftInner.y, 2));
+    const rightEyeWidth = Math.sqrt(Math.pow(rightOuter.x - rightInner.x, 2) + Math.pow(rightOuter.y - rightInner.y, 2));
+    if (leftEyeWidth === 0 || rightEyeWidth === 0) return null;
 
-    const eyeFx1 = (leftIris.x - nose.x) / eyeDist;
-    const eyeFy1 = (leftIris.y - nose.y) / eyeDist;
-    const eyeFx2 = (rightIris.x - nose.x) / eyeDist;
-    const eyeFy2 = (rightIris.y - nose.y) / eyeDist;
+    const leftEyeMidX = (leftOuter.x + leftInner.x) / 2;
+    const leftEyeMidY = (leftOuter.y + leftInner.y) / 2;
+    const rightEyeMidX = (rightOuter.x + rightInner.x) / 2;
+    const rightEyeMidY = (rightOuter.y + rightInner.y) / 2;
 
+    const eyeFx1 = (leftIris.x - leftEyeMidX) / leftEyeWidth;
+    const eyeFy1 = (leftIris.y - leftEyeMidY) / leftEyeWidth;
+    const eyeFx2 = (rightIris.x - rightEyeMidX) / rightEyeWidth;
+    const eyeFy2 = (rightIris.y - rightEyeMidY) / rightEyeWidth;
+
+    // --- HEAD FEATURES (Rotation invariant to camera distance) ---
+    const eyesMidX = (leftOuter.x + rightOuter.x) / 2;
+    const eyesMidY = (leftOuter.y + rightOuter.y) / 2;
+
+    const headYaw = (nose.x - eyesMidX) / faceScale;
+    const headPitch = (nose.y - eyesMidY) / faceScale;
+
+    // Absolute head translation coordinates (useful fallback for spatial context)
     const headX = nose.x;
     const headY = nose.y;
 
-    return [eyeFx1, eyeFy1, eyeFx2, eyeFy2, headX, headY, headX, headY];
+    // Stable 8-dimensional feature vector
+    return [eyeFx1, eyeFy1, eyeFx2, eyeFy2, headYaw, headPitch, headX, headY];
   }
 
   private lastLandmarks: any = null;
@@ -157,6 +258,8 @@ class GazeTrackerService {
     this.videoElement = videoEL;
     this.onGaze = onGaze;
     this.isRunning = true;
+    this.xFilter.reset();
+    this.yFilter.reset();
 
     if (!this.faceMesh) {
       const fm = new (window as any).FaceMesh({locateFile: (file: string) => {
@@ -198,6 +301,8 @@ class GazeTrackerService {
 
   public stop() {
     this.isRunning = false;
+    this.xFilter.reset();
+    this.yFilter.reset();
     if (this.camera) {
       this.camera.stop();
     }
@@ -226,16 +331,19 @@ class GazeTrackerService {
           distSq += Math.pow(f[i] - avgF[i], 2);
         }
       } else if (this.trackingMode === 'head') {
-        for (let i = 4; i < 8; i++) {
-          distSq += Math.pow(f[i] - avgF[i], 2);
-        }
+        // High gain for relative head yaw & pitch, standard weight for translation x & y
+        distSq += Math.pow(f[4] - avgF[4], 2) * 4.0;
+        distSq += Math.pow(f[5] - avgF[5], 2) * 4.0;
+        distSq += Math.pow(f[6] - avgF[6], 2) * 0.5;
+        distSq += Math.pow(f[7] - avgF[7], 2) * 0.5;
       } else { // hybrid
         for (let i = 0; i < 4; i++) {
           distSq += Math.pow(f[i] - avgF[i], 2) * 0.3;
         }
-        for (let i = 4; i < 8; i++) {
-          distSq += Math.pow(f[i] - avgF[i], 2) * 0.7;
-        }
+        distSq += Math.pow(f[4] - avgF[4], 2) * 1.5;
+        distSq += Math.pow(f[5] - avgF[5], 2) * 1.5;
+        distSq += Math.pow(f[6] - avgF[6], 2) * 0.5;
+        distSq += Math.pow(f[7] - avgF[7], 2) * 0.5;
       }
       
       const weight = 1.0 / (distSq + 0.000001);
