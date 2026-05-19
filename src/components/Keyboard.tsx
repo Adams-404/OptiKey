@@ -106,16 +106,130 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
   });
   const [isLlmActive, setIsLlmActive] = useState<boolean>(false);
   
-  const [layoutMode, setLayoutMode] = useState<'quadrant' | 'qwerty'>('quadrant');
+  const [layoutMode, setLayoutMode] = useState<'quadrant' | 'qwerty'>('qwerty');
   const [quadrantPage, setQuadrantPage] = useState(0);
 
   const hoverStartTimeRef = useRef<number | null>(null);
   const lastHoveredKeyRef = useRef<string | null>(null);
   const rafRef = useRef<number | null>(null);
 
+  const autoTypeQueueRef = useRef<string[]>([]);
+  const isAutoTypingRef = useRef<boolean>(false);
+
+  const processNextAutoChar = () => {
+    if (autoTypeQueueRef.current.length === 0) {
+      isAutoTypingRef.current = false;
+      return;
+    }
+
+    isAutoTypingRef.current = true;
+    const char = autoTypeQueueRef.current.shift()!;
+    const keyId = char === ' ' ? 'SPACE' : char;
+
+    const el = document.getElementById('key-' + keyId);
+    if (!el) {
+      // If the target key is not rendered or doesn't exist, type it instantly
+      handleKeyPress(keyId);
+      setTimeout(processNextAutoChar, 200);
+      return;
+    }
+
+    const rect = el.getBoundingClientRect();
+    const targetX = rect.left + rect.width / 2;
+    const targetY = rect.top + rect.height / 2;
+
+    // Glide animation from current mouse coordinates to key center
+    const startX = gazePoint.x > 0 ? gazePoint.x : window.innerWidth / 2;
+    const startY = gazePoint.y > 0 ? gazePoint.y : window.innerHeight / 2;
+    const glideDuration = 850; // Slower, more natural human-eye search speed (850ms)
+    const startTime = performance.now();
+
+    // Random organic curve vectors to prevent straight programmatic lines
+    const curveAmpX = (Math.random() - 0.5) * 60; // Curved offset up to 60px
+    const curveAmpY = (Math.random() - 0.5) * 60;
+
+    const animateGlide = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / glideDuration, 1);
+      
+      // Decelerating easeOutCubic curve for organic glide
+      const ease = 1 - Math.pow(1 - progress, 3);
+
+      let currentX = startX + (targetX - startX) * ease;
+      let currentY = startY + (targetY - startY) * ease;
+
+      // Add elegant curving Bezier drift peaking in the middle of the transition
+      const curveFactor = Math.sin(progress * Math.PI);
+      currentX += curveAmpX * curveFactor;
+      currentY += curveAmpY * curveFactor;
+
+      // Add natural high-frequency micro-saccadic eye jitter
+      const jitterX = (Math.random() - 0.5) * 14 * (1 - progress * 0.4);
+      const jitterY = (Math.random() - 0.5) * 14 * (1 - progress * 0.4);
+      currentX += jitterX;
+      currentY += jitterY;
+
+      window.dispatchEvent(new CustomEvent('simulated-gaze', { detail: { x: currentX, y: currentY } }));
+
+      if (progress < 1) {
+        requestAnimationFrame(animateGlide);
+      } else {
+        // Human hesitation delay (250ms) before brain registers the target and starts dwelling
+        setTimeout(animateDwell, 250);
+      }
+    };
+
+    const animateDwell = () => {
+      setHoveredKey(keyId);
+      const dwellStartTime = performance.now();
+
+      const runDwell = (now: number) => {
+        const elapsed = now - dwellStartTime;
+        const progress = Math.min(elapsed / dwellTime, 1);
+        setDwellProgress(progress);
+
+        // While dwelling, maintain a tight organic gaze tremor (8px noise cluster)
+        const microJitterX = targetX + (Math.random() - 0.5) * 8;
+        const microJitterY = targetY + (Math.random() - 0.5) * 8;
+        window.dispatchEvent(new CustomEvent('simulated-gaze', { detail: { x: microJitterX, y: microJitterY } }));
+
+        if (elapsed < dwellTime) {
+          requestAnimationFrame(runDwell);
+        } else {
+          // Fire simulated key press
+          handleKeyPress(keyId);
+          setHoveredKey(null);
+          setDwellProgress(0);
+          
+          // Wait 350ms after typing (human eye saccade transition delay) before moving to the next character
+          setTimeout(processNextAutoChar, 350);
+        }
+      };
+
+      requestAnimationFrame(runDwell);
+    };
+
+    requestAnimationFrame(animateGlide);
+  };
+
+  const startAutoTyping = (fullText: string) => {
+    if (fullText === '') {
+      setText('');
+      return;
+    }
+
+    const chars = fullText.toUpperCase().split('');
+    autoTypeQueueRef.current = [...autoTypeQueueRef.current, ...chars];
+    
+    if (!isAutoTypingRef.current) {
+      processNextAutoChar();
+    }
+  };
+
   // Update suggestions based on text and Groq API Key
   useEffect(() => {
     let active = true;
+    let debounceTimer: NodeJS.Timeout | null = null;
 
     const fetchPredictions = async () => {
       const localPredictions = AutocompleteService.getPredictions(text);
@@ -126,18 +240,25 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
         return;
       }
 
-      if (groqKey) {
+      // Groq LLM is only queried if:
+      // 1. Groq API Key is present
+      // 2. The user completed a word (text ends with a space)
+      if (groqKey && text.endsWith(' ')) {
         setIsLlmActive(true);
-        const onlinePredictions = await AutocompleteService.queryGroqPrediction(text, groqKey);
         
-        if (active) {
-          if (onlinePredictions.length > 0) {
-            setSuggestions(onlinePredictions);
-          } else {
-            setSuggestions(localPredictions);
-            setIsLlmActive(false);
+        // Debounce calls by 250ms to prevent spamming the API when spacing/typing quickly
+        debounceTimer = setTimeout(async () => {
+          const onlinePredictions = await AutocompleteService.queryGroqPrediction(text, groqKey);
+          
+          if (active) {
+            if (onlinePredictions.length > 0) {
+              setSuggestions(onlinePredictions);
+            } else {
+              setSuggestions(localPredictions);
+              setIsLlmActive(false);
+            }
           }
-        }
+        }, 250);
       } else {
         if (active) {
           setSuggestions(localPredictions);
@@ -150,8 +271,36 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
 
     return () => {
       active = false;
+      if (debounceTimer) clearTimeout(debounceTimer);
     };
   }, [text, groqKey]);
+
+  // Listener for Wizard of Oz remote control events
+  useEffect(() => {
+    const handleRemoteClick = (e: Event) => {
+      const keyId = (e as CustomEvent).detail.keyId;
+      if (keyId === 'TRIGGER_DWELL') {
+        if (lastHoveredKeyRef.current) {
+          handleKeyPress(lastHoveredKeyRef.current);
+        }
+      } else {
+        handleKeyPress(keyId);
+      }
+    };
+
+    const handleRemoteType = (e: Event) => {
+      const newText = (e as CustomEvent).detail.text;
+      startAutoTyping(newText);
+    };
+
+    window.addEventListener('remote-click', handleRemoteClick);
+    window.addEventListener('remote-type', handleRemoteType);
+
+    return () => {
+      window.removeEventListener('remote-click', handleRemoteClick);
+      window.removeEventListener('remote-type', handleRemoteType);
+    };
+  }, []);
 
   const handleKeyPress = (keyId: string) => {
     if (keyId === 'BACKSPACE') {
@@ -194,6 +343,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
   };
 
   useEffect(() => {
+    if (isAutoTypingRef.current) return;
     const keys = document.querySelectorAll('[data-key]');
     let foundKey: string | null = null;
     
@@ -223,6 +373,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
   }, [gazePoint]);
 
   useEffect(() => {
+    if (isAutoTypingRef.current) return;
     const checkDwell = (timestamp: number) => {
       if (hoverStartTimeRef.current && lastHoveredKeyRef.current) {
         const elapsed = timestamp - hoverStartTimeRef.current;
