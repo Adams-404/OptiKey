@@ -60,7 +60,9 @@ export default function Calibration({ onComplete }: Props) {
 
       const features = gazeTracker.getCurrentFeatures();
       if (features) {
-        pointFeatures.push(features);
+        if (elapsed > 400) {
+          pointFeatures.push(features);
+        }
         setSamplesCount(pointFeatures.length);
         // Randomize quality score slightly for realistic HUD feel
         setQualityScore(Math.floor(95 + Math.random() * 5));
