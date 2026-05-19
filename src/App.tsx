@@ -71,6 +71,18 @@ export default function App() {
     };
   }, []);
 
+  // Listen for simulated eye-gaze coordinates from presentation autotyper
+  useEffect(() => {
+    const handleSimulatedGaze = (e: Event) => {
+      const { x, y } = (e as CustomEvent).detail;
+      setGazePoint({ x, y });
+    };
+    window.addEventListener('simulated-gaze', handleSimulatedGaze);
+    return () => {
+      window.removeEventListener('simulated-gaze', handleSimulatedGaze);
+    };
+  }, []);
+
   useEffect(() => {
     if (videoRef.current) {
       gazeTracker.start(videoRef.current, (point) => {
