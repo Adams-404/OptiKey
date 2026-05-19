@@ -106,7 +106,7 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
   });
   const [isLlmActive, setIsLlmActive] = useState<boolean>(false);
   
-  const [layoutMode, setLayoutMode] = useState<'quadrant' | 'qwerty'>('quadrant');
+  const [layoutMode, setLayoutMode] = useState<'quadrant' | 'qwerty'>('qwerty');
   const [quadrantPage, setQuadrantPage] = useState(0);
 
   const hoverStartTimeRef = useRef<number | null>(null);
@@ -161,6 +161,33 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
       if (debounceTimer) clearTimeout(debounceTimer);
     };
   }, [text, groqKey]);
+
+  // Listener for Wizard of Oz remote control events
+  useEffect(() => {
+    const handleRemoteClick = (e: Event) => {
+      const keyId = (e as CustomEvent).detail.keyId;
+      if (keyId === 'TRIGGER_DWELL') {
+        if (lastHoveredKeyRef.current) {
+          handleKeyPress(lastHoveredKeyRef.current);
+        }
+      } else {
+        handleKeyPress(keyId);
+      }
+    };
+
+    const handleRemoteType = (e: Event) => {
+      const newText = (e as CustomEvent).detail.text;
+      setText(newText);
+    };
+
+    window.addEventListener('remote-click', handleRemoteClick);
+    window.addEventListener('remote-type', handleRemoteType);
+
+    return () => {
+      window.removeEventListener('remote-click', handleRemoteClick);
+      window.removeEventListener('remote-type', handleRemoteType);
+    };
+  }, []);
 
   const handleKeyPress = (keyId: string) => {
     if (keyId === 'BACKSPACE') {

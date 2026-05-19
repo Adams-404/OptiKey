@@ -1,11 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Calibration from './components/Calibration';
 import Keyboard from './components/Keyboard';
+import RemoteControl from './components/RemoteControl';
 import { gazeTracker, Point } from './services/GazeTrackerService';
 import { Eye, Settings, Activity, Navigation, Sliders, Cpu, Video } from 'lucide-react';
 import { cn } from './components/Keyboard';
 
 export default function App() {
+  const [isRemote] = useState(() => window.location.pathname === '/remote');
+  
+  if (isRemote) {
+    return <RemoteControl />;
+  }
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [mode, setMode] = useState<'calibration' | 'keyboard'>('calibration');
@@ -18,6 +25,40 @@ export default function App() {
   const [dwellTime, setDwellTime] = useState<number>(700);
 
   const lastMouseActivityRef = useRef<number>(0);
+  const lastRemoteActivityRef = useRef<number>(0);
+
+  // SSE receiver for remote control (Wizard of Oz mode)
+  useEffect(() => {
+    const source = new EventSource('/api/mouse-stream');
+
+    source.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'move') {
+          setGazePoint({ x: data.x * window.innerWidth, y: data.y * window.innerHeight });
+          lastRemoteActivityRef.current = Date.now();
+        } else if (data.type === 'click') {
+          const customEvent = new CustomEvent('remote-click', { detail: { keyId: data.keyId } });
+          window.dispatchEvent(customEvent);
+        } else if (data.type === 'type') {
+          const customEvent = new CustomEvent('remote-type', { detail: { text: data.text } });
+          window.dispatchEvent(customEvent);
+        } else if (data.type === 'command') {
+          if (data.action === 'start-calibration') {
+            setMode('calibration');
+          } else if (data.action === 'exit-calibration') {
+            setMode('keyboard');
+          }
+        }
+      } catch (e) {
+        console.error('SSE parser error', e);
+      }
+    };
+
+    return () => {
+      source.close();
+    };
+  }, []);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -33,7 +74,7 @@ export default function App() {
   useEffect(() => {
     if (videoRef.current) {
       gazeTracker.start(videoRef.current, (point) => {
-        if (Date.now() - lastMouseActivityRef.current < 1500) {
+        if (Date.now() - lastMouseActivityRef.current < 1500 || Date.now() - lastRemoteActivityRef.current < 1500) {
           return;
         }
         setGazePoint(point);
