@@ -96,6 +96,7 @@ export default function Calibration({ onComplete }: Props) {
     if (currentIdx < points.length - 1) {
       setCurrentIdx(currentIdx + 1);
     } else {
+      gazeTracker.fitModels();
       onComplete();
     }
   };

@@ -14,6 +14,35 @@ export interface FeatureVector {
 
 export type GazeListener = (point: Point, isBlinking: boolean) => void;
 
+function fitLinearRegression(xs: number[], ys: number[]) {
+  const n = xs.length;
+  if (n === 0) return { slope: 1, intercept: 0 };
+
+  let sumX = 0;
+  let sumY = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += xs[i];
+    sumY += ys[i];
+  }
+  const meanX = sumX / n;
+  const meanY = sumY / n;
+
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - meanX;
+    const dy = ys[i] - meanY;
+    num += dx * dy;
+    den += dx * dx;
+  }
+
+  // Fallback if there is zero variance (user stood perfectly still)
+  const slope = den < 0.000001 ? 0 : num / den;
+  const intercept = meanY - slope * meanX;
+
+  return { slope, intercept };
+}
+
 class OneEuroFilter {
   private minCutoff: number;
   private beta: number;
@@ -84,11 +113,62 @@ class GazeTrackerService {
   public trackingMode: 'eye' | 'head' | 'hybrid' = 'head';
   public smoothing: number = 8;
 
+  // Linear Regression models for each tracker mode and axis
+  private headModelX = { slope: 1, intercept: 0 };
+  private headModelY = { slope: 1, intercept: 0 };
+  private eyeModelX = { slope: 1, intercept: 0 };
+  private eyeModelY = { slope: 1, intercept: 0 };
+  private modelsFitted = false;
+
   private xFilter = new OneEuroFilter();
   private yFilter = new OneEuroFilter();
 
   public setCanvas(canvas: HTMLCanvasElement | null) {
     this.canvasElement = canvas;
+  }
+
+  public fitModels() {
+    if (this.calibrationData.length === 0) return;
+
+    const screenXs: number[] = [];
+    const screenYs: number[] = [];
+    const headXs: number[] = [];
+    const headYs: number[] = [];
+    const eyeXs: number[] = [];
+    const eyeYs: number[] = [];
+
+    for (const cp of this.calibrationData) {
+      if (cp.features.length === 0) continue;
+      
+      const avgF = new Array(8).fill(0);
+      for (const feat of cp.features) {
+        for (let i = 0; i < feat.length; i++) {
+          avgF[i] += feat[i] || 0;
+        }
+      }
+      for (let i = 0; i < 8; i++) avgF[i] /= cp.features.length;
+
+      // Extract average eye gaze features (average left and right eye horizontal/vertical values)
+      const eyeX = (avgF[0] + avgF[2]) / 2;
+      const eyeY = (avgF[1] + avgF[3]) / 2;
+
+      // Extract absolute head coordinates (nose.x, nose.y)
+      const headX = avgF[6];
+      const headY = avgF[7];
+
+      screenXs.push(cp.screenPos.x);
+      screenYs.push(cp.screenPos.y);
+      headXs.push(headX);
+      headYs.push(headY);
+      eyeXs.push(eyeX);
+      eyeYs.push(eyeY);
+    }
+
+    this.headModelX = fitLinearRegression(headXs, screenXs);
+    this.headModelY = fitLinearRegression(headYs, screenYs);
+    this.eyeModelX = fitLinearRegression(eyeXs, screenXs);
+    this.eyeModelY = fitLinearRegression(eyeYs, screenYs);
+    this.modelsFitted = true;
   }
   
   private updateFilterParams() {
@@ -165,6 +245,33 @@ class GazeTrackerService {
           }
         }
         ctx.restore();
+
+        // DRAW DEBUG HUD
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          const landmarks = results.multiFaceLandmarks[0];
+          ctx.save();
+          ctx.fillStyle = '#00d2ff';
+          ctx.font = 'bold 14px monospace';
+          ctx.fillText(`Landmarks: ${landmarks.length}`, 15, 30);
+          
+          const testFeatures = this.getCurrentFeatures();
+          ctx.fillText(`Features: ${testFeatures !== null ? 'VALID' : 'INVALID'}`, 15, 50);
+          
+          if (!testFeatures) {
+            const missing = [];
+            if (!landmarks[468]) missing.push('L_Iris(468)');
+            if (!landmarks[473]) missing.push('R_Iris(473)');
+            if (!landmarks[1]) missing.push('Nose(1)');
+            if (!landmarks[33]) missing.push('L_Outer(33)');
+            if (!landmarks[133]) missing.push('L_Inner(133)');
+            if (!landmarks[263]) missing.push('R_Outer(263)');
+            if (!landmarks[362]) missing.push('R_Inner(362)');
+            if (!landmarks[152]) missing.push('Chin(152)');
+            ctx.fillStyle = '#ff4444';
+            ctx.fillText(`Missing: ${missing.join(', ')}`, 15, 75);
+          }
+          ctx.restore();
+        }
       }
     }
 
@@ -203,8 +310,7 @@ class GazeTrackerService {
   public getCurrentFeatures(): number[] | null {
     if (!this.lastLandmarks) return null;
     const landmarks = this.lastLandmarks;
-    const leftIris = landmarks[468]; 
-    const rightIris = landmarks[473]; 
+    
     const nose = landmarks[1]; 
     const leftOuter = landmarks[33];
     const leftInner = landmarks[133];
@@ -212,7 +318,8 @@ class GazeTrackerService {
     const rightInner = landmarks[362];
     const chin = landmarks[152];
 
-    if (!leftIris || !rightIris || !nose || !leftOuter || !leftInner || !rightOuter || !rightInner || !chin) {
+    // Core face structures must be present for tracking
+    if (!nose || !leftOuter || !leftInner || !rightOuter || !rightInner || !chin) {
       return null;
     }
 
@@ -231,6 +338,10 @@ class GazeTrackerService {
     const leftEyeMidY = (leftOuter.y + leftInner.y) / 2;
     const rightEyeMidX = (rightOuter.x + rightInner.x) / 2;
     const rightEyeMidY = (rightOuter.y + rightInner.y) / 2;
+
+    // Self-healing fallback: Use refined iris if available, otherwise fall back to eye midpoints
+    const leftIris = landmarks[468] || { x: leftEyeMidX, y: leftEyeMidY };
+    const rightIris = landmarks[473] || { x: rightEyeMidX, y: rightEyeMidY };
 
     const eyeFx1 = (leftIris.x - leftEyeMidX) / leftEyeWidth;
     const eyeFy1 = (leftIris.y - leftEyeMidY) / leftEyeWidth;
@@ -308,54 +419,43 @@ class GazeTrackerService {
     }
   }
 
-  // IDW interpolation
+  // Regression mapping estimation
   private estimateScreenPosition(f: number[]): Point {
-    let sumWeight = 0;
-    let sumX = 0;
-    let sumY = 0;
-
-    for (const cp of this.calibrationData) {
-      if (cp.features.length === 0) continue;
-      
-      const avgF = new Array(8).fill(0);
-      for (const feat of cp.features) {
-        for (let i = 0; i < feat.length; i++) {
-          avgF[i] += feat[i] || 0;
-        }
-      }
-      for (let i = 0; i < 8; i++) avgF[i] /= cp.features.length;
-
-      let distSq = 0;
-      if (this.trackingMode === 'eye') {
-        for (let i = 0; i < 4; i++) {
-          distSq += Math.pow(f[i] - avgF[i], 2);
-        }
-      } else if (this.trackingMode === 'head') {
-        // High gain for relative head yaw & pitch, standard weight for translation x & y
-        distSq += Math.pow(f[4] - avgF[4], 2) * 4.0;
-        distSq += Math.pow(f[5] - avgF[5], 2) * 4.0;
-        distSq += Math.pow(f[6] - avgF[6], 2) * 0.5;
-        distSq += Math.pow(f[7] - avgF[7], 2) * 0.5;
-      } else { // hybrid
-        for (let i = 0; i < 4; i++) {
-          distSq += Math.pow(f[i] - avgF[i], 2) * 0.3;
-        }
-        distSq += Math.pow(f[4] - avgF[4], 2) * 1.5;
-        distSq += Math.pow(f[5] - avgF[5], 2) * 1.5;
-        distSq += Math.pow(f[6] - avgF[6], 2) * 0.5;
-        distSq += Math.pow(f[7] - avgF[7], 2) * 0.5;
-      }
-      
-      const weight = 1.0 / (distSq + 0.000001);
-      sumWeight += weight;
-      sumX += cp.screenPos.x * weight;
-      sumY += cp.screenPos.y * weight;
+    if (!this.modelsFitted) {
+      return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     }
 
-    return {
-      x: sumX / sumWeight,
-      y: sumY / sumWeight
-    };
+    // Extract current features
+    const eyeX = (f[0] + f[2]) / 2;
+    const eyeY = (f[1] + f[3]) / 2;
+    const headX = f[6];
+    const headY = f[7];
+
+    let x = 0;
+    let y = 0;
+
+    if (this.trackingMode === 'eye') {
+      x = this.eyeModelX.slope * eyeX + this.eyeModelX.intercept;
+      y = this.eyeModelY.slope * eyeY + this.eyeModelY.intercept;
+    } else if (this.trackingMode === 'head') {
+      x = this.headModelX.slope * headX + this.headModelX.intercept;
+      y = this.headModelY.slope * headY + this.headModelY.intercept;
+    } else { // hybrid
+      const eyePredX = this.eyeModelX.slope * eyeX + this.eyeModelX.intercept;
+      const eyePredY = this.eyeModelY.slope * eyeY + this.eyeModelY.intercept;
+      const headPredX = this.headModelX.slope * headX + this.headModelX.intercept;
+      const headPredY = this.headModelY.slope * headY + this.headModelY.intercept;
+
+      // Combine: 30% eye, 70% head
+      x = 0.3 * eyePredX + 0.7 * headPredX;
+      y = 0.3 * eyePredY + 0.7 * headPredY;
+    }
+
+    // Clamp coordinates to screen boundaries to keep cursor visible
+    x = Math.max(0, Math.min(window.innerWidth, x));
+    y = Math.max(0, Math.min(window.innerHeight, y));
+
+    return { x, y };
   }
 }
 
