@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Point } from '../services/GazeTrackerService';
+import { AutocompleteService } from '../services/AutocompleteService';
 import { Delete, CornerDownLeft, Space, RefreshCw, LayoutGrid } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -25,7 +26,6 @@ const QUADRANT_PAGES = [
   ['Y', 'Z', '.', '?'],
 ];
 
-const PREDICTIONS = ['THE', 'BE', 'TO', 'OF', 'AND', 'A', 'IN', 'THAT', 'HAVE', 'I', 'IT', 'FOR', 'NOT', 'ON', 'WITH', 'HE', 'AS', 'YOU', 'DO', 'AT'];
 
 interface KeyProps {
   key?: React.Key;
@@ -97,7 +97,14 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
   const [text, setText] = useState('');
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const [dwellProgress, setDwellProgress] = useState(0);
-  const [suggestions, setSuggestions] = useState<string[]>(PREDICTIONS.slice(0, 5));
+  
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [groqKey, setGroqKey] = useState<string>(() => {
+    return ((import.meta as any).env?.VITE_GROQ_API_KEY as string) || 
+           localStorage.getItem('groq_api_key') || 
+           '';
+  });
+  const [isLlmActive, setIsLlmActive] = useState<boolean>(false);
   
   const [layoutMode, setLayoutMode] = useState<'quadrant' | 'qwerty'>('quadrant');
   const [quadrantPage, setQuadrantPage] = useState(0);
@@ -106,23 +113,57 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
   const lastHoveredKeyRef = useRef<string | null>(null);
   const rafRef = useRef<number | null>(null);
 
-  // Update suggestions based on last word
+  // Update suggestions based on text and Groq API Key
   useEffect(() => {
-    const words = text.split(' ');
-    const lastWord = words[words.length - 1].toUpperCase();
-    if (lastWord) {
-      const matches = PREDICTIONS.filter(p => p.startsWith(lastWord) && p !== lastWord).slice(0, 5);
-      setSuggestions(matches.length > 0 ? matches : PREDICTIONS.slice(0, 5));
-    } else {
-      setSuggestions(PREDICTIONS.slice(0, 5));
-    }
-  }, [text]);
+    let active = true;
+
+    const fetchPredictions = async () => {
+      const localPredictions = AutocompleteService.getPredictions(text);
+      
+      if (!text.trim()) {
+        if (active) setSuggestions(localPredictions);
+        setIsLlmActive(false);
+        return;
+      }
+
+      if (groqKey) {
+        setIsLlmActive(true);
+        const onlinePredictions = await AutocompleteService.queryGroqPrediction(text, groqKey);
+        
+        if (active) {
+          if (onlinePredictions.length > 0) {
+            setSuggestions(onlinePredictions);
+          } else {
+            setSuggestions(localPredictions);
+            setIsLlmActive(false);
+          }
+        }
+      } else {
+        if (active) {
+          setSuggestions(localPredictions);
+          setIsLlmActive(false);
+        }
+      }
+    };
+
+    fetchPredictions();
+
+    return () => {
+      active = false;
+    };
+  }, [text, groqKey]);
 
   const handleKeyPress = (keyId: string) => {
     if (keyId === 'BACKSPACE') {
       setText(t => t.slice(0, -1));
     } else if (keyId === 'SPACE') {
-      setText(t => t + ' ');
+      setText(t => {
+        const words = t.trim().split(/\s+/);
+        if (words.length >= 2) {
+          AutocompleteService.learnTransition(words[words.length - 2], words[words.length - 1]);
+        }
+        return t + ' ';
+      });
     } else if (keyId === 'ENTER') {
       setText(t => t + '\n');
     } else if (keyId === 'PAGE_NEXT') {
@@ -132,7 +173,10 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
     } else if (keyId.startsWith('PRED_')) {
       const word = keyId.replace('PRED_', '');
       setText(t => {
-        const words = t.split(' ');
+        const words = t.trim().split(/\s+/);
+        if (words.length > 0) {
+          AutocompleteService.learnTransition(words[words.length - 1], word);
+        }
         words.pop();
         return words.join(' ') + (words.length > 0 ? ' ' : '') + word + ' ';
       });
@@ -215,7 +259,34 @@ export default function Keyboard({ gazePoint, dwellTime = 700 }: Props) {
             <span className="text-[10px] uppercase tracking-widest text-cyan-400 font-extrabold flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span> Output Message
             </span>
-            <span className="text-[10px] text-zinc-500 font-mono">{text.length} chars</span>
+            
+            {/* AI Autocomplete Widget */}
+            <div className="flex items-center gap-3">
+              <span className={cn(
+                "text-[9px] uppercase tracking-widest font-mono font-bold px-2 py-0.5 rounded border transition-all duration-300",
+                isLlmActive 
+                  ? "bg-purple-500/10 border-purple-500/30 text-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.2)] animate-pulse"
+                  : "bg-cyan-500/10 border-cyan-500/20 text-cyan-400"
+              )}>
+                AI AUTOCOMPLETE: {isLlmActive ? 'GROQ DYNAMIC' : 'OFFLINE SMART'}
+              </span>
+              
+              {!((import.meta as any).env?.VITE_GROQ_API_KEY) && (
+                <input 
+                  type="password"
+                  placeholder="🔑 Paste Groq API Key..."
+                  value={groqKey}
+                  onChange={(e) => {
+                    const val = e.target.value.trim();
+                    setGroqKey(val);
+                    localStorage.setItem('groq_api_key', val);
+                  }}
+                  className="bg-zinc-950/70 border border-white/5 text-zinc-300 placeholder-zinc-600 rounded-lg text-[10px] px-3 py-1 focus:outline-none focus:border-cyan-500/30 transition-all w-[180px] focus:w-[220px]"
+                />
+              )}
+              
+              <span className="text-[10px] text-zinc-500 font-mono">{text.length} chars</span>
+            </div>
           </div>
           <div className="text-3xl font-mono text-white leading-relaxed overflow-y-auto flex-grow break-words whitespace-pre-wrap">
             {text}
